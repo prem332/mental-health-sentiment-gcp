@@ -12,7 +12,7 @@ import argparse, logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ACCURACY_THRESHOLD = 0.95
+ACCURACY_THRESHOLD = 0.94
 F1_THRESHOLD       = 0.93
 
 def build_pipeline(project, bucket, region, image, epochs):

@@ -8,8 +8,6 @@ env/
 models/*.keras
 models/*.pkl
 models/*.h5
-data/
-*.csv
 .ipynb_checkpoints/
 .vscode/
 .idea/

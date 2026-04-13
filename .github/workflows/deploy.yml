@@ -1,0 +1,81 @@
+name: CI/CD → GCP Cloud Run
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PROJECT_ID:   ${{ secrets.GCP_PROJECT_ID }}
+  REGION:       us-central1
+  SERVICE_NAME: mental-health-sentiment
+  REGISTRY:     us-central1-docker.pkg.dev
+  REPO:         mental-health-sentiment-repo
+
+jobs:
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.10", cache: pip }
+      - run: pip install -r requirements.txt pytest
+      - run: pytest tests/ -v --tb=short
+        env: { MODEL_DIR: tests/mock_models }
+
+  build-push:
+    name: 🐳 Build & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with: { credentials_json: "${{ secrets.GCP_SA_KEY }}" }
+      - run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+      - id: meta
+        run: |
+          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.SERVICE_NAME }}"
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "sha_tag=${IMAGE}:${SHA}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${IMAGE}:latest" >> $GITHUB_OUTPUT
+      - run: |
+          docker build -t ${{ steps.meta.outputs.sha_tag }} -t ${{ steps.meta.outputs.latest_tag }} .
+          docker push ${{ steps.meta.outputs.sha_tag }}
+          docker push ${{ steps.meta.outputs.latest_tag }}
+
+  deploy:
+    name: 🚀 Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: google-github-actions/auth@v2
+        with: { credentials_json: "${{ secrets.GCP_SA_KEY }}" }
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region:  ${{ env.REGION }}
+          image:   ${{ needs.build-push.outputs.image }}:latest
+          flags: >
+            --allow-unauthenticated
+            --memory=2Gi
+            --cpu=2
+            --min-instances=0
+            --max-instances=3
+            --timeout=120
+          env_vars: |
+            GCS_BUCKET=${{ secrets.GCS_BUCKET }}
+            MODEL_DIR=/app/models
+            MAX_LEN=100
+          service_account: ${{ secrets.CLOUD_RUN_SA_EMAIL }}
+      - run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.deploy.outputs.url }}/health")
+          [ "$STATUS" = "200" ] && echo "✅ ${{ steps.deploy.outputs.url }}" || (echo "❌ Health check failed" && exit 1)

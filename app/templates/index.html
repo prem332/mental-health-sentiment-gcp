@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mental Health Sentiment Analyzer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}"/>
+</head>
+<body>
+  <div class="container">
+    <h1>🧠 Mental Health Sentiment Analyzer</h1>
+    <p class="subtitle">Powered by Bidirectional LSTM · 96.2% Accuracy</p>
+    <div class="card">
+      <textarea id="inputText" placeholder="Enter a tweet or text about mental health..." rows="5"></textarea>
+      <button id="analyzeBtn" onclick="analyze()">Analyze Sentiment</button>
+    </div>
+    <div id="result" class="result hidden"></div>
+    <div id="loader" class="loader hidden">Analyzing…</div>
+  </div>
+  <script>
+    async function analyze() {
+      const text = document.getElementById("inputText").value.trim();
+      if (!text) { alert("Please enter some text."); return; }
+      document.getElementById("loader").classList.remove("hidden");
+      document.getElementById("result").classList.add("hidden");
+      document.getElementById("analyzeBtn").disabled = true;
+      try {
+        const res  = await fetch("/predict", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text})});
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        const colorMap = {Positive:"#2ecc71", Negative:"#e74c3c", Neutral:"#3498db", Irrelevant:"#95a5a6"};
+        const color    = colorMap[data.sentiment] || "#333";
+        const probHtml = Object.entries(data.probabilities).sort((a,b)=>b[1]-a[1]).map(([cls,prob])=>`
+          <div class="prob-row">
+            <span>${cls}</span>
+            <div class="bar-wrap"><div class="bar" style="width:${(prob*100).toFixed(1)}%;background:${colorMap[cls]||'#aaa'}"></div></div>
+            <span>${(prob*100).toFixed(1)}%</span>
+          </div>`).join("");
+        document.getElementById("result").innerHTML = `
+          <h2 style="color:${color}">Sentiment: ${data.sentiment}</h2>
+          <p>Confidence: <strong>${(data.confidence*100).toFixed(2)}%</strong></p>
+          <div class="probs">${probHtml}</div>`;
+        document.getElementById("result").classList.remove("hidden");
+      } catch(e) {
+        document.getElementById("result").innerHTML = `<p class="error">Error: ${e.message}</p>`;
+        document.getElementById("result").classList.remove("hidden");
+      } finally {
+        document.getElementById("loader").classList.add("hidden");
+        document.getElementById("analyzeBtn").disabled = false;
+      }
+    }
+    document.getElementById("inputText").addEventListener("keydown", e => { if(e.ctrlKey && e.key==="Enter") analyze(); });
+  </script>
+</body>
+</html>

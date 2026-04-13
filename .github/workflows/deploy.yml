@@ -31,23 +31,33 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     outputs:
-      image: ${{ steps.meta.outputs.image }}
+      image_uri: ${{ steps.set_image.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: google-github-actions/auth@v2
-        with: { credentials_json: "${{ secrets.GCP_SA_KEY }}" }
-      - run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
-      - id: meta
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Set image URI
+        id: set_image
         run: |
+          IMAGE="us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/mental-health-sentiment-repo/mental-health-sentiment"
+          echo "image_uri=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "Image URI: ${IMAGE}"
+
+      - name: Build and push
+        run: |
+          IMAGE="${{ steps.set_image.outputs.image_uri }}"
           SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.SERVICE_NAME }}"
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-          echo "sha_tag=${IMAGE}:${SHA}" >> $GITHUB_OUTPUT
-          echo "latest_tag=${IMAGE}:latest" >> $GITHUB_OUTPUT
-      - run: |
-          docker build -t ${{ steps.meta.outputs.sha_tag }} -t ${{ steps.meta.outputs.latest_tag }} .
-          docker push ${{ steps.meta.outputs.sha_tag }}
-          docker push ${{ steps.meta.outputs.latest_tag }}
+          docker build -t "${IMAGE}:${SHA}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${SHA}"
+          docker push "${IMAGE}:latest"
 
   deploy:
     name: 🚀 Deploy to Cloud Run
@@ -56,26 +66,34 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: google-github-actions/auth@v2
-        with: { credentials_json: "${{ secrets.GCP_SA_KEY }}" }
-      - uses: google-github-actions/setup-gcloud@v2
-      - id: deploy
-        uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: ${{ env.SERVICE_NAME }}
-          region:  ${{ env.REGION }}
-          image:   ${{ needs.build-push.outputs.image }}:latest
-          flags: >
-            --allow-unauthenticated
-            --memory=2Gi
-            --cpu=2
-            --min-instances=0
-            --max-instances=3
-            --timeout=120
-          env_vars: |
-            GCS_BUCKET=${{ secrets.GCS_BUCKET }}
-            MODEL_DIR=/app/models
-            MAX_LEN=100
-          service_account: ${{ secrets.CLOUD_RUN_SA_EMAIL }}
-      - run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.deploy.outputs.url }}/health")
-          [ "$STATUS" = "200" ] && echo "✅ ${{ steps.deploy.outputs.url }}" || (echo "❌ Health check failed" && exit 1)
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="${{ needs.build-push.outputs.image_uri }}:latest"
+          echo "Deploying image: ${IMAGE}"
+          gcloud run deploy mental-health-sentiment \
+            --image "${IMAGE}" \
+            --region us-central1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 2 \
+            --min-instances 0 \
+            --max-instances 3 \
+            --timeout 120 \
+            --set-env-vars "GCS_BUCKET=${{ secrets.GCS_BUCKET }},MODEL_DIR=/app/models,MAX_LEN=100" \
+            --service-account "${{ secrets.CLOUD_RUN_SA_EMAIL }}"
+
+      - name: Get service URL
+        run: |
+          URL=$(gcloud run services describe mental-health-sentiment \
+            --region us-central1 \
+            --format 'value(status.url)')
+          echo "✅ Deployed to: ${URL}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${URL}/health")
+          echo "Health check: ${STATUS}"
+          [ "$STATUS" = "200" ] && echo "✅ Health check passed!" || echo "⚠️ Health check returned ${STATUS}"

@@ -21,3 +21,13 @@ htmlcov/
 .pytest_cache/
 *.log
 .DS_Store
+
+# Allow training results (small files only)
+!training_results/metrics.json
+!training_results/label_encoder.pkl
+!training_results/class_weights.pkl
+!training_results/training_history.pkl
+
+# Still block large model files
+training_results/*.keras
+training_results/tokenizer.pkl

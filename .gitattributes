@@ -1,0 +1,2 @@
+training_results/*.keras filter=lfs diff=lfs merge=lfs -text
+training_results/tokenizer.pkl filter=lfs diff=lfs merge=lfs -text
